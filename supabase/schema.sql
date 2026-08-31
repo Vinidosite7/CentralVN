@@ -138,3 +138,10 @@ create table if not exists profiles (
 alter table profiles enable row level security;
 drop policy if exists own_all on profiles;
 create policy own_all on profiles for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ============================================================================
+-- v2 — pagamento parcial de dívida + assinatura recorrente no cartão
+-- (rode por cima; 'if not exists' evita erro se já existir)
+-- ============================================================================
+alter table debts add column if not exists paid numeric not null default 0;
+alter table card_purchases add column if not exists recurring boolean not null default false;

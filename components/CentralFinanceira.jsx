@@ -7,7 +7,7 @@ import { subscribePush, unsubscribePush } from "../lib/push";
 /* ============================================================================
    CENTRAL FINANCEIRA — Vini (VN)
    Identidade visual herdada do TioTrack/BossFlow: fundo #070812, superfícies
-   #0a0b16, bordas sutis, Syne (headings) + DM Sans (texto) + JetBrains Mono
+   #0a0b16, bordas sutis, Poppins (títulos + números) + Inter (texto)
    (números), bottom nav flutuante em pill com glow por cor.
 
    Pensado pra TDAH: boleto na cara, registro em 2 toques, saldo real na hora.
@@ -34,9 +34,9 @@ const T = {
   red: "#f87171",
   yellow: "#fbbf24",
   cyan: "#22d3ee",
-  display: "'Syne', sans-serif",
-  sans: "'DM Sans', sans-serif",
-  mono: "'JetBrains Mono', monospace",
+  display: "'Poppins', sans-serif",
+  sans: "'Inter', -apple-system, sans-serif",
+  mono: "'Poppins', sans-serif",   // números agora em Poppins (estilo Foco3), não mais mono/robótico
 };
 
 // Paleta de destaque escolhível (id salvo no profile)
@@ -113,13 +113,18 @@ const tone = (t) => ({ red: T.red, yellow: T.yellow, text2: T.text2 }[t] || T.te
    - openOnCard(cardId): soma das parcelas NÃO pagas → é o que "come" o limite
    - monthBill(cardId, monthKey): soma das parcelas daquele mês
 */
-function purchaseInstallmentValue(p) { return p.total / p.installments; }
-function purchaseMonths(p) { return Array.from({ length: p.installments }, (_, i) => addMonthsKey(p.startMonth, i)); }
-function paidCount(p) { return p.paid || 0; } // quantas parcelas já pagas
+function purchaseInstallmentValue(p) { return p.recurring ? p.total : p.total / p.installments; }
+function purchaseMonths(p) {
+  // recorrente: mostra do mês inicial até 24 meses à frente (assinatura "sem fim" pra projeção)
+  const n = p.recurring ? 24 : p.installments;
+  return Array.from({ length: n }, (_, i) => addMonthsKey(p.startMonth, i));
+}
+function paidCount(p) { return p.paid || 0; } // parcelas pagas (não usado em recorrente)
 function openOnCard(purchases, cardId) {
   return purchases.filter((p) => p.cardId === cardId).reduce((a, p) => {
+    if (p.recurring) return a + p.total; // assinatura ocupa 1 mensalidade do limite
     const remaining = p.installments - paidCount(p);
-    return a + purchaseInstallmentValue(p) * remaining;
+    return a + (p.total / p.installments) * remaining;
   }, 0);
 }
 function monthBill(purchases, cardId, mk) {
@@ -264,13 +269,13 @@ export default function CentralFinanceira({ userId }) {
             </div>
             <div style={{ textAlign: "right" }}>
               <p style={{ margin: 0, fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 1 }}>Saldo real</p>
-              <p style={{ margin: 0, fontFamily: T.mono, fontWeight: 600, fontSize: 19, color: realBalance >= 0 ? T.green : T.red }}>{fmt(realBalance)}</p>
+              <p style={{ margin: 0, fontFamily: T.mono, fontWeight: 700, fontSize: 20, letterSpacing: "-0.01em", color: realBalance >= 0 ? T.green : T.red }}>{fmt(realBalance)}</p>
             </div>
           </header>
 
           <main className="content">
             {tab === "hoje" && <Hoje {...{ urgentBills, realBalance, cashOnHand, billsTotal, inToday, outToday, salesToday, owe, owed }} onPay={(id) => { set({ bills: db.bills.map((b) => b.id === id ? { ...b, paid: true } : b) }); DB.setBillPaid(id, true); }} goto={setTab} />}
-            {tab === "contas" && <Contas db={db} set={set} />}
+            {tab === "contas" && <Contas db={db} set={set} displayName={displayName} />}
             {tab === "vendas" && <Vendas db={db} set={set} />}
             {tab === "cartoes" && <Cartoes db={db} set={set} owe={owe} owed={owed} onOpen={setOpenCard} onNew={() => setQuick("card")} />}
             {tab === "perfil" && <Perfil profile={profile} saveProfile={saveProfile} />}
@@ -423,7 +428,7 @@ function Hoje({ urgentBills, realBalance, cashOnHand, billsTotal, inToday, outTo
       <div className="gridWrap" style={{ display: "grid", gap: 12 }}>
         <Card>
           <CardTitle>Saldo real</CardTitle>
-          <p style={{ margin: "4px 0 12px", fontFamily: T.mono, fontWeight: 600, fontSize: 32, color: realBalance >= 0 ? T.green : T.red }}>{fmt(realBalance)}</p>
+          <p style={{ margin: "4px 0 12px", fontFamily: T.mono, fontWeight: 700, fontSize: 34, letterSpacing: "-0.02em", color: realBalance >= 0 ? T.green : T.red }}>{fmt(realBalance)}</p>
           <div style={{ display: "flex", gap: 8 }}>
             <Pill label="Caixa (PIX)" value={fmt(cashOnHand)} color={T.cyan} />
             <Pill label="A pagar" value={"-" + fmt(billsTotal)} color={T.red} />
@@ -457,10 +462,15 @@ function Hoje({ urgentBills, realBalance, cashOnHand, billsTotal, inToday, outTo
 }
 
 /* ============================== CONTAS ================================== */
-function Contas({ db, set }) {
+function Contas({ db, set, displayName }) {
   const [showForm, setShowForm] = useState(false);
   const unpaid = db.bills.filter((b) => !b.paid).sort((a, b) => daysUntil(a.due) - daysUntil(b.due));
   const paid = db.bills.filter((b) => b.paid);
+  // gastos do mês por categoria
+  const monthExp = db.expenses.filter((e) => e.date.slice(0, 7) === todayISO().slice(0, 7));
+  const pessoal = monthExp.filter((e) => e.cat === "Pessoal");
+  const empresa = monthExp.filter((e) => e.cat !== "Pessoal"); // empresa/tráfego/ferramentas/etc
+  const delExp = (id) => { set({ expenses: db.expenses.filter((x) => x.id !== id) }); DB.delExpense(id); };
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <Row><H2>Contas a pagar</H2><button className="btnGhost" onClick={() => setShowForm((s) => !s)}>{showForm ? "Fechar" : "+ Nova"}</button></Row>
@@ -474,12 +484,19 @@ function Contas({ db, set }) {
             return (
               <Row key={b.id}>
                 <div><p className="rt">{b.title} {b.recurring && <span style={{ color: T.text3, fontSize: 11 }}>↻</span>}</p><p className="rs" style={{ color: tone(dl.tone) }}>{dl.text} · {b.cat} · {b.method}</p></div>
-                <span style={{ display: "flex", alignItems: "center", gap: 10 }}><Num>{fmt(b.amount)}</Num><button className="btnPay" onClick={() => { set({ bills: db.bills.map((x) => x.id === b.id ? { ...x, paid: true } : x) }); DB.setBillPaid(b.id, true); }}>Paguei</button></span>
+                <span style={{ display: "flex", alignItems: "center", gap: 10 }}><Num>{fmt(b.amount)}</Num><button className="btnPay" onClick={() => { set({ bills: db.bills.map((x) => x.id === b.id ? { ...x, paid: true } : x) }); DB.setBillPaid(b.id, true); }}>Paguei</button><button className="link" style={{ color: T.text3, fontSize: 18 }} onClick={() => { set({ bills: db.bills.filter((x) => x.id !== b.id) }); DB.delBill(b.id); }}>×</button></span>
               </Row>
             );
           })}
         </div>
       </Card>
+
+      {/* Gastos do mês: Pessoal vs Empresa */}
+      <div className="gridWrap" style={{ display: "grid", gap: 12 }}>
+        <ExpenseBucket title={`Gasto Pessoal${displayName ? " · " + displayName : ""}`} color={T.accentLight} items={pessoal} onDel={delExp} />
+        <ExpenseBucket title="Gasto Empresa" color={T.cyan} items={empresa} onDel={delExp} />
+      </div>
+
       {paid.length > 0 && (
         <Card style={{ opacity: 0.65 }}>
           <CardTitle>Pagas</CardTitle>
@@ -489,6 +506,28 @@ function Contas({ db, set }) {
         </Card>
       )}
     </div>
+  );
+}
+
+function ExpenseBucket({ title, color, items, onDel }) {
+  const total = items.reduce((a, e) => a + e.amount, 0);
+  return (
+    <Card glow={color}>
+      <Row style={{ alignItems: "baseline" }}>
+        <CardTitle>{title}</CardTitle>
+        <Num style={{ color, fontSize: 16 }}>{fmt(total)}</Num>
+      </Row>
+      <p style={{ margin: "2px 0 10px", fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 0.5 }}>este mês</p>
+      <div style={{ display: "grid", gap: 6 }}>
+        {items.length === 0 && <Empty text="Sem gastos ainda." />}
+        {items.slice(0, 20).map((e) => (
+          <Row key={e.id}>
+            <div><p className="rt" style={{ fontSize: 13 }}>{e.title}</p><p className="rs">{e.date.slice(8, 10)}/{e.date.slice(5, 7)} · {e.cat} · {e.method}</p></div>
+            <span style={{ display: "flex", gap: 8, alignItems: "center" }}><Num sm style={{ color: T.red }}>{fmt(e.amount)}</Num><button className="link" onClick={() => onDel(e.id)}>×</button></span>
+          </Row>
+        ))}
+      </div>
+    </Card>
   );
 }
 
@@ -506,8 +545,8 @@ function Vendas({ db, set }) {
       <Row><H2>Vendas</H2><Seg value={range} setValue={setRange} options={[["hoje", "Hoje"], ["7d", "7d"], ["mes", "Mês"]]} /></Row>
       <Card>
         <Row style={{ alignItems: "baseline" }}>
-          <div><CardTitle>Faturamento</CardTitle><p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 600, fontSize: 28, color: T.green }}>{fmt(total)}</p></div>
-          {roi && <div style={{ textAlign: "right" }}><p style={{ margin: 0, fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 1 }}>ROAS</p><p style={{ margin: 0, fontFamily: T.mono, fontWeight: 600, fontSize: 20, color: roi >= 1.5 ? T.green : T.yellow }}>{roi.toFixed(2)}x</p></div>}
+          <div><CardTitle>Faturamento</CardTitle><p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 30, letterSpacing: "-0.02em", color: T.green }}>{fmt(total)}</p></div>
+          {roi && <div style={{ textAlign: "right" }}><p style={{ margin: 0, fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 1 }}>ROAS</p><p style={{ margin: 0, fontFamily: T.mono, fontWeight: 700, fontSize: 21, letterSpacing: "-0.01em", color: roi >= 1.5 ? T.green : T.yellow }}>{roi.toFixed(2)}x</p></div>}
         </Row>
         <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
           {byPlat.map((p) => (
@@ -627,7 +666,7 @@ function CardDetail({ card, purchases, onClose, onAddPurchase, onPayInstallment,
       <div style={{ background: theme.grad, borderRadius: 14, padding: 14, marginBottom: 14, position: "relative", overflow: "hidden" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div><p style={{ margin: 0, fontFamily: T.mono, fontSize: 12, color: "rgba(255,255,255,0.8)", letterSpacing: 2 }}>•••• {card.last4}</p><p style={{ margin: "4px 0 0", fontSize: 10, color: "rgba(255,255,255,0.6)" }}>fecha dia {card.closing} · vence dia {card.dueDay}</p></div>
-          <div style={{ textAlign: "right" }}><p style={{ margin: 0, fontSize: 9, color: "rgba(255,255,255,0.6)", textTransform: "uppercase" }}>Disponível</p><p style={{ margin: 0, fontFamily: T.mono, fontWeight: 600, fontSize: 20, color: "#fff" }}>{fmt(avail)}</p></div>
+          <div style={{ textAlign: "right" }}><p style={{ margin: 0, fontSize: 9, color: "rgba(255,255,255,0.6)", textTransform: "uppercase" }}>Disponível</p><p style={{ margin: 0, fontFamily: T.mono, fontWeight: 700, fontSize: 21, letterSpacing: "-0.01em", color: "#fff" }}>{fmt(avail)}</p></div>
         </div>
       </div>
 
@@ -650,6 +689,17 @@ function CardDetail({ card, purchases, onClose, onAddPurchase, onPayInstallment,
       <div style={{ display: "grid", gap: 8, marginTop: addMode ? 12 : 0 }}>
         {purchases.length === 0 && <Empty text="Nenhuma compra lançada." />}
         {purchases.map((p) => {
+          if (p.recurring) {
+            return (
+              <div key={p.id} style={{ background: T.raised, border: `1px solid ${T.cyan}44`, borderRadius: 12, padding: 12 }}>
+                <Row>
+                  <div><p className="rt">{p.desc} <span style={{ color: T.cyan, fontSize: 11 }}>↻ mensal</span></p><p className="rs">{fmt(p.total)}/mês · desde {monthLabel(p.startMonth)}</p></div>
+                  <button className="link" onClick={() => onDelPurchase(p.id)}>×</button>
+                </Row>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: T.text2 }}>Assinatura fixa — repete todo mês na fatura.</p>
+              </div>
+            );
+          }
           const val = purchaseInstallmentValue(p);
           const paid = paidCount(p);
           const remaining = p.installments - paid;
@@ -681,18 +731,57 @@ function CardDetail({ card, purchases, onClose, onAddPurchase, onPayInstallment,
 /* ============================ SUB-COMPONENTS ============================= */
 function DebtManager({ db, set }) {
   const [form, setForm] = useState(false);
+  const [payingId, setPayingId] = useState(null);
+  const [payVal, setPayVal] = useState("");
   const active = db.debts.filter((d) => !d.settled);
+
+  const registerPay = (d) => {
+    const add = parseFloat(payVal) || 0;
+    if (add <= 0) return;
+    const newPaid = Math.min(d.amount, (d.paid || 0) + add);
+    const settled = newPaid >= d.amount;
+    set({ debts: db.debts.map((x) => x.id === d.id ? { ...x, paid: newPaid, settled } : x) });
+    DB.payDebt(d.id, newPaid, d.amount);
+    setPayingId(null); setPayVal("");
+  };
+
   return (
-    <div style={{ display: "grid", gap: 8 }}>
+    <div style={{ display: "grid", gap: 10 }}>
       {active.length === 0 && <Empty text="Ninguém deve nada. Limpo." />}
-      {active.map((d) => (
-        <Row key={d.id}>
-          <div><p className="rt">{d.who}</p><p className="rs" style={{ color: d.direction === "owe" ? T.red : T.green }}>{d.direction === "owe" ? "Eu devo" : "Me devem"} · {d.note}</p></div>
-          <span style={{ display: "flex", gap: 8, alignItems: "center" }}><Num style={{ color: d.direction === "owe" ? T.red : T.green }}>{fmt(d.amount)}</Num><button className="link" onClick={() => { set({ debts: db.debts.map((x) => x.id === d.id ? { ...x, settled: true } : x) }); DB.settleDebt(d.id); }}>quitou</button></span>
-        </Row>
-      ))}
+      {active.map((d) => {
+        const paid = d.paid || 0;
+        const remaining = d.amount - paid;
+        const pct = Math.min(100, (paid / d.amount) * 100);
+        const col = d.direction === "owe" ? T.red : T.green;
+        return (
+          <div key={d.id} style={{ background: T.raised, border: `1px solid ${T.border}`, borderRadius: 12, padding: 12 }}>
+            <Row>
+              <div><p className="rt">{d.who}</p><p className="rs" style={{ color: col }}>{d.direction === "owe" ? "Eu devo" : "Me devem"}{d.note ? " · " + d.note : ""}</p></div>
+              <button className="link" style={{ color: T.text3, fontSize: 18 }} onClick={() => { set({ debts: db.debts.filter((x) => x.id !== d.id) }); DB.delDebt(d.id); }}>×</button>
+            </Row>
+            <div style={{ marginTop: 8 }}>
+              <div className="bar"><div className="barFill" style={{ width: `${pct}%`, background: col }} /></div>
+              <Row style={{ marginTop: 6 }}>
+                <span style={{ fontSize: 11, color: T.text2, fontFamily: T.mono }}>{fmt(paid)} de {fmt(d.amount)} · falta {fmt(remaining)}</span>
+              </Row>
+            </div>
+            {payingId === d.id ? (
+              <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                <input className="input" type="number" autoFocus placeholder="Valor pago" value={payVal} onChange={(e) => setPayVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && registerPay(d)} style={{ flex: 1 }} />
+                <button className="btnPay" onClick={() => registerPay(d)}>OK</button>
+                <button className="link" onClick={() => { setPayingId(null); setPayVal(""); }}>×</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <button className="btnPaySm" onClick={() => { setPayingId(d.id); setPayVal(""); }}>Registrar pagamento</button>
+                <button className="btnPaySm" style={{ background: col + "22", color: col, borderColor: col + "55" }} onClick={() => { set({ debts: db.debts.map((x) => x.id === d.id ? { ...x, paid: d.amount, settled: true } : x) }); DB.payDebt(d.id, d.amount, d.amount); }}>Quitar tudo</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
       <button className="btnGhost" style={{ marginTop: 4 }} onClick={() => setForm((s) => !s)}>{form ? "Fechar" : "+ Dívida"}</button>
-      {form && <DebtForm onSave={async (d) => { setForm(false); const { data } = await DB.addDebt(d); set({ debts: [data || { id: uid(), settled: false, ...d }, ...db.debts] }); }} />}
+      {form && <DebtForm onSave={async (d) => { setForm(false); const { data } = await DB.addDebt(d); set({ debts: [data || { id: uid(), settled: false, paid: 0, ...d }, ...db.debts] }); }} />}
     </div>
   );
 }
@@ -783,19 +872,33 @@ function CardForm({ onClose, onSave }) {
   );
 }
 function PurchaseForm({ onSave }) {
-  const [f, setF] = useState({ desc: "", total: "", installments: 1, startMonth: monthKey(), paid: 0 });
+  const [f, setF] = useState({ desc: "", total: "", installments: 1, startMonth: monthKey(), paid: 0, recurring: false });
   const up = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const perInstallment = f.total && f.installments ? parseFloat(f.total) / f.installments : 0;
   return (
     <div style={{ background: T.raised, border: `1px solid ${T.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 10 }}>
-      <Field label="O que comprou"><input className="input" value={f.desc} onChange={(e) => up("desc", e.target.value)} placeholder="ex: MacBook" /></Field>
-      <div style={{ display: "flex", gap: 10 }}>
-        <Field label="Valor total"><input className="input" type="number" value={f.total} onChange={(e) => up("total", e.target.value)} placeholder="12000" /></Field>
-        <Field label="Parcelas"><input className="input" type="number" min={1} value={f.installments} onChange={(e) => up("installments", Math.max(1, +e.target.value || 1))} /></Field>
+      {/* seletor tipo: parcelada x assinatura */}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button className="pchip" style={{ flex: 1, borderColor: !f.recurring ? T.accent : T.border, color: !f.recurring ? T.accentLight : T.text2 }} onClick={() => up("recurring", false)}>Compra parcelada</button>
+        <button className="pchip" style={{ flex: 1, borderColor: f.recurring ? T.cyan : T.border, color: f.recurring ? T.cyan : T.text2 }} onClick={() => up("recurring", true)}>Assinatura mensal ↻</button>
       </div>
-      <Field label="Parcelas já pagas (se houver)"><input className="input" type="number" min={0} max={f.installments} value={f.paid} onChange={(e) => up("paid", Math.min(f.installments, Math.max(0, +e.target.value || 0)))} /></Field>
-      {perInstallment > 0 && <p style={{ margin: 0, fontSize: 12, color: T.accentLight, fontFamily: T.mono }}>{f.installments}× de {fmt(perInstallment)} → some no limite até quitar</p>}
-      <button className="btnPrimary" onClick={() => f.desc && f.total && onSave({ ...f, total: parseFloat(f.total), installments: +f.installments, paid: +f.paid })}>Lançar compra</button>
+      <Field label={f.recurring ? "Nome da assinatura" : "O que comprou"}><input className="input" value={f.desc} onChange={(e) => up("desc", e.target.value)} placeholder={f.recurring ? "ex: Netflix, Xtracky" : "ex: MacBook"} /></Field>
+      {f.recurring ? (
+        <>
+          <Field label="Valor por mês"><input className="input" type="number" value={f.total} onChange={(e) => up("total", e.target.value)} placeholder="97" /></Field>
+          <p style={{ margin: 0, fontSize: 12, color: T.cyan, fontFamily: T.mono }}>{f.total ? fmt(parseFloat(f.total)) : "R$ —"}/mês fixo · repete todo mês na fatura</p>
+        </>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Field label="Valor total"><input className="input" type="number" value={f.total} onChange={(e) => up("total", e.target.value)} placeholder="12000" /></Field>
+            <Field label="Parcelas"><input className="input" type="number" min={1} value={f.installments} onChange={(e) => up("installments", Math.max(1, +e.target.value || 1))} /></Field>
+          </div>
+          <Field label="Parcelas já pagas (se houver)"><input className="input" type="number" min={0} max={f.installments} value={f.paid} onChange={(e) => up("paid", Math.min(f.installments, Math.max(0, +e.target.value || 0)))} /></Field>
+          {perInstallment > 0 && <p style={{ margin: 0, fontSize: 12, color: T.accentLight, fontFamily: T.mono }}>{f.installments}× de {fmt(perInstallment)} → some no limite até quitar</p>}
+        </>
+      )}
+      <button className="btnPrimary" onClick={() => f.desc && f.total && onSave({ ...f, total: parseFloat(f.total), installments: f.recurring ? 1 : +f.installments, paid: f.recurring ? 0 : +f.paid })}>{f.recurring ? "Lançar assinatura" : "Lançar compra"}</button>
     </div>
   );
 }
@@ -827,9 +930,9 @@ function Card({ children, style, glow, accent }) {
   return <section style={{ background: accent ? `linear-gradient(180deg, ${accent}, ${T.card})` : T.card, border: `1px solid ${glow ? glow + "55" : T.border}`, borderRadius: 16, padding: 16, boxShadow: glow ? `0 0 30px ${glow}18` : "none", ...style }}>{children}</section>;
 }
 function CardTitle({ children, style }) { return <h3 style={{ margin: 0, fontSize: 12, fontWeight: 600, color: T.text2, textTransform: "uppercase", letterSpacing: 0.6, fontFamily: T.sans, ...style }}>{children}</h3>; }
-function H2({ children }) { return <h2 style={{ fontFamily: T.display, fontWeight: 800, fontSize: 20, margin: 0, letterSpacing: "-0.02em" }}>{children}</h2>; }
+function H2({ children }) { return <h2 className="h2title" style={{ fontFamily: T.display, fontWeight: 800, fontSize: 20, margin: 0, letterSpacing: "-0.02em" }}>{children}</h2>; }
 function Row({ children, style }) { return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, ...style }}>{children}</div>; }
-function Num({ children, style, dim, sm }) { return <span style={{ fontFamily: T.mono, fontWeight: 600, fontSize: sm ? 12 : 14, color: dim ? T.text2 : T.text1, ...style }}>{children}</span>; }
+function Num({ children, style, dim, sm }) { return <span style={{ fontFamily: T.mono, fontWeight: 700, fontSize: sm ? 12 : 14, color: dim ? T.text2 : T.text1, letterSpacing: "-0.01em", ...style }}>{children}</span>; }
 function Stat({ label, value, color }) { return <div><p style={{ margin: 0, fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</p><p style={{ margin: "2px 0 0", fontFamily: T.mono, fontWeight: 600, fontSize: 16, color }}>{value}</p></div>; }
 function Pill({ label, value, color }) { return <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", borderRadius: 12, padding: "8px 12px" }}><p style={{ margin: 0, fontSize: 10, color: T.text3 }}>{label}</p><p style={{ margin: "2px 0 0", fontWeight: 600, color, fontFamily: T.mono, fontSize: 13 }}>{value}</p></div>; }
 function Empty({ text }) { return <p style={{ margin: 0, color: T.text3, fontSize: 13, textAlign: "center", padding: "10px 0" }}>{text}</p>; }
@@ -865,7 +968,7 @@ function filterByRange(arr, range) {
 function StyleTag() {
   return (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700;800&display=swap');
       :root { --acc: #7c6ef7; --acc-l: #a78bfa; --acc-18: #7c6ef72e; --acc-42: #7c6ef76b; }
       * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
       .no-scrollbar { scrollbar-width: none; } .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -888,14 +991,14 @@ function StyleTag() {
       .bar { height: 8px; background: rgba(255,255,255,0.05); border-radius: 999px; overflow: hidden; }
       .barFill { height: 100%; border-radius: 999px; transition: width 0.5s cubic-bezier(0.4,0,0.2,1); }
       .cardBar { height: 6px; background: rgba(255,255,255,0.2); border-radius: 999px; overflow: hidden; }
-      .creditCard { width: 100%; aspect-ratio: 1.586; max-height: 210px; border-radius: 18px; padding: 18px; border: none; cursor: pointer; position: relative; overflow: hidden; font-family: inherit; transition: transform .2s; }
+      .creditCard { width: 100%; aspect-ratio: 1.7; max-height: 200px; min-height: 165px; border-radius: 18px; padding: 16px; border: none; cursor: pointer; position: relative; overflow: hidden; font-family: inherit; transition: transform .2s; }
       .creditCard:active { transform: scale(0.98); }
       .tierBadge { display: inline-block; margin-top: 4px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: rgba(255,255,255,0.85); border: 1px solid rgba(255,255,255,0.35); border-radius: 6px; padding: 2px 7px; }
-      .fab { position: fixed; bottom: 88px; right: 18px; width: 58px; height: 58px; border-radius: 19px; border: none; background: linear-gradient(135deg, ${T.accent}, ${T.accentLight}); color: #fff; font-size: 30px; font-weight: 300; cursor: pointer; box-shadow: 0 10px 30px var(--acc-42); z-index: 40; display: flex; align-items: center; justify-content: center; }
+      .fab { position: fixed; bottom: 96px; right: 16px; width: 52px; height: 52px; border-radius: 17px; border: none; background: linear-gradient(135deg, ${T.accent}, ${T.accentLight}); color: #fff; font-size: 27px; font-weight: 300; cursor: pointer; box-shadow: 0 8px 24px var(--acc-42); z-index: 45; display: flex; align-items: center; justify-content: center; }
       .fab:active { transform: scale(0.92); }
       .nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: center; padding: 0 10px 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); z-index: 30; pointer-events: none; }
-      .navInner { pointer-events: auto; display: grid; grid-template-columns: repeat(4,1fr); gap: 5px; width: min(100%, 430px); padding: 8px; border-radius: 22px; background: rgba(10,10,18,0.94); border: 1px solid var(--acc-18); box-shadow: 0 8px 40px rgba(0,0,0,0.6); backdrop-filter: blur(20px); }
-      .navBtn { height: 46px; border-radius: 15px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; font-family: inherit; transition: all .15s; }
+      .navInner { pointer-events: auto; display: grid; grid-template-columns: repeat(5,1fr); gap: 4px; width: 100%; padding: 6px; border-radius: 20px; background: rgba(10,10,18,0.96); border: 1px solid var(--acc-18); box-shadow: 0 8px 40px rgba(0,0,0,0.6); backdrop-filter: blur(20px); }
+      .navBtn { height: 52px; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; font-family: inherit; transition: all .15s; padding: 0 2px; }
       .navBtn:active { transform: scale(0.94); }
       .seg { display: flex; background: rgba(255,255,255,0.04); border-radius: 11px; padding: 3px; }
       .segBtn { border: none; padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
@@ -911,7 +1014,7 @@ function StyleTag() {
       /* mobile-first: coluna única, sidebar escondida, bottom nav + fab visíveis */
       .shell { position: relative; z-index: 1; }
       .sidebar { display: none; }
-      .mainCol { max-width: 480px; margin: 0 auto; padding-bottom: 96px; }
+      .mainCol { max-width: 480px; margin: 0 auto; padding-bottom: 120px; }
       .topHead { padding: 20px 16px 4px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
       .brand { margin: 0; font-family: ${T.display}; font-weight: 800; font-size: 20px; letter-spacing: -0.03em; color: #f0f0ff; }
       .pageTitle { margin: 8px 0 0; font-family: ${T.display}; font-weight: 800; font-size: 26px; letter-spacing: -0.03em; color: #f4f4ff; }
@@ -923,6 +1026,9 @@ function StyleTag() {
       .sideNew { margin-top: 20px; width: 100%; background: linear-gradient(135deg, var(--acc), var(--acc-l)); color: #fff; border: none; border-radius: 12px; padding: 12px; font-weight: 700; font-size: 14px; cursor: pointer; font-family: inherit; box-shadow: 0 8px 24px var(--acc-42); }
       .sideNew:active { transform: scale(0.98); }
       .sideBtn:hover { background: rgba(255,255,255,0.04); }
+      .h2title { display: none; }  /* título já aparece no header (pageTitle); evita duplicar */
+      /* o Row que continha o H2 agora tem só o botão de ação → empurra pra direita */
+      .h2title + button, .h2title + .seg { margin-left: auto; }
 
       /* ===================== DESKTOP (>= 900px) ===================== */
       @media (min-width: 900px) {
