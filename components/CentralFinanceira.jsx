@@ -190,7 +190,8 @@ export default function CentralFinanceira({ userId }) {
       else applyAccent("purple");
       setLoading(false);
     })();
-    if (userId) subscribePush(userId);
+    // Push NÃO é ligado automaticamente: iOS exige gesto do usuário.
+    // Ele é ativado só quando você toca no toggle em Perfil.
     return () => { alive = false; };
   }, [userId]);
 
@@ -342,7 +343,17 @@ function Perfil({ profile, saveProfile }) {
     if (!profile.notif) {
       const r = await subscribePush((await supabase.auth.getUser()).data?.user?.id);
       if (r.ok) { saveProfile({ notif: true }); setNotifMsg(""); }
-      else setNotifMsg(r.reason === "denied" ? "Permissão negada no navegador." : r.reason === "unsupported" ? "Push não suportado aqui (instale como app)." : "Não deu pra ligar agora.");
+      else {
+        const motivos = {
+          denied: "Permissão negada. Vá em Ajustes do iPhone → Notificações → Central e permita.",
+          unsupported: "Push não suportado. Abra pelo app instalado na tela de início (não pelo Safari).",
+          "no-user": "Você não está logado. Saia e entre de novo.",
+          "no-key": "Falta a chave VAPID no site (NEXT_PUBLIC_VAPID_PUBLIC_KEY na Vercel + redeploy).",
+          db: "Não salvou no banco. Rode a tabela push_subscriptions no schema.sql.",
+          error: "Erro inesperado ao inscrever.",
+        };
+        setNotifMsg((motivos[r.reason] || "Não deu pra ligar") + ` [${r.reason}]`);
+      }
     } else {
       await unsubscribePush();
       saveProfile({ notif: false });
