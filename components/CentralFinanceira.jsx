@@ -1015,7 +1015,7 @@ function StyleTag() {
       .shell { position: relative; z-index: 1; }
       .sidebar { display: none; }
       .mainCol { max-width: 480px; margin: 0 auto; padding-bottom: 120px; }
-      .topHead { padding: 20px 16px 4px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+      .topHead { padding: calc(20px + env(safe-area-inset-top)) 16px 4px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
       .brand { margin: 0; font-family: ${T.display}; font-weight: 800; font-size: 20px; letter-spacing: -0.03em; color: #f0f0ff; }
       .pageTitle { margin: 8px 0 0; font-family: ${T.display}; font-weight: 800; font-size: 26px; letter-spacing: -0.03em; color: #f4f4ff; }
       .content { padding: 8px 14px 0; }

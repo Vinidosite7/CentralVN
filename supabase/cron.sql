@@ -1,10 +1,11 @@
--- Agenda o send-reminders todo dia às 11:00 UTC (~08:00 BRT).
--- Requer as extensões pg_cron e pg_net (Database > Extensions no painel).
+-- Agenda o send-reminders TODA HORA (a função decide o que mandar conforme a
+-- hora local de cada usuário: 8h resumo, 13h meio-dia, 21h noite).
+-- Requer extensões pg_cron e pg_net (Database > Extensions no painel).
 -- Troque <PROJECT_REF> e <CRON_SECRET> pelos seus valores.
 
 select cron.schedule(
-  'central-daily-reminders',
-  '0 11 * * *',
+  'central-hourly-reminders',
+  '0 * * * *',                      -- no minuto 0 de toda hora
   $$
   select net.http_post(
     url     := 'https://<PROJECT_REF>.functions.supabase.co/send-reminders',
@@ -13,4 +14,5 @@ select cron.schedule(
   );
   $$
 );
--- Para remover:  select cron.unschedule('central-daily-reminders');
+-- Para remover:  select cron.unschedule('central-hourly-reminders');
+-- Se você tinha agendado a versão antiga:  select cron.unschedule('central-daily-reminders');
