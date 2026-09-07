@@ -167,7 +167,7 @@ SEED.purchases = [
 /* ============================================================================
    APP
    ========================================================================== */
-const EMPTY = { bills: [], cards: [], purchases: [], debts: [], balances: [], sales: [], expenses: [] };
+const EMPTY = { bills: [], cards: [], purchases: [], debts: [], balances: [], sales: [], expenses: [], loans: [] };
 
 export default function CentralFinanceira({ userId }) {
   const [tab, setTab] = useState("hoje");
@@ -182,10 +182,10 @@ export default function CentralFinanceira({ userId }) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [res, prof] = await Promise.all([DB.loadAll(), DB.loadProfile()]);
+      const [res, prof, loans] = await Promise.all([DB.loadAll(), DB.loadProfile(), DB.loadLoans().catch(() => [])]);
       if (!alive) return;
       if (res.error) { setDb(SEED); } // offline/sem tabelas: usa seed pra não travar
-      else setDb({ bills: res.bills, cards: res.cards, purchases: res.purchases, debts: res.debts, balances: res.balances, sales: res.sales, expenses: res.expenses });
+      else setDb({ bills: res.bills, cards: res.cards, purchases: res.purchases, debts: res.debts, balances: res.balances, sales: res.sales, expenses: res.expenses, loans: loans || [] });
       if (prof) { setProfile(prof); applyAccent(prof.accent); }
       else applyAccent("purple");
       setLoading(false);
@@ -228,6 +228,7 @@ export default function CentralFinanceira({ userId }) {
   const NAV = [
     ["hoje", "Hoje", "◎"],
     ["contas", "Contas", "▤"],
+    ["dividas", "Dívidas", "◈"],
     ["vendas", "Vendas", "↗"],
     ["cartoes", "Cartões", "▦"],
     ["perfil", "Perfil", "☺"],
@@ -266,7 +267,7 @@ export default function CentralFinanceira({ userId }) {
                 <h1 className="brand">Central <span style={{ color: T.accent }}>VN</span></h1>
                 <span style={{ fontSize: 12, color: T.text3 }}>{displayName} · {new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}</span>
               </div>
-              <p className="pageTitle">{{ hoje: greeting() + ", " + displayName, contas: "Contas a pagar", vendas: "Vendas", cartoes: "Cartões & saldos", perfil: "Perfil" }[tab]}</p>
+              <p className="pageTitle">{{ hoje: greeting() + ", " + displayName, contas: "Contas a pagar", dividas: "Dívidas", vendas: "Vendas", cartoes: "Cartões & saldos", perfil: "Perfil" }[tab]}</p>
             </div>
             <div style={{ textAlign: "right" }}>
               <p style={{ margin: 0, fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 1 }}>Saldo real</p>
@@ -277,6 +278,7 @@ export default function CentralFinanceira({ userId }) {
           <main className="content">
             {tab === "hoje" && <Hoje {...{ urgentBills, realBalance, cashOnHand, billsTotal, inToday, outToday, salesToday, owe, owed }} onPay={(id) => { set({ bills: db.bills.map((b) => b.id === id ? { ...b, paid: true } : b) }); DB.setBillPaid(id, true); }} goto={setTab} />}
             {tab === "contas" && <Contas db={db} set={set} displayName={displayName} />}
+            {tab === "dividas" && <Dividas db={db} set={set} />}
             {tab === "vendas" && <Vendas db={db} set={set} />}
             {tab === "cartoes" && <Cartoes db={db} set={set} owe={owe} owed={owed} onOpen={setOpenCard} onNew={() => setQuick("card")} />}
             {tab === "perfil" && <Perfil profile={profile} saveProfile={saveProfile} />}
@@ -543,6 +545,144 @@ function ExpenseBucket({ title, color, items, onDel }) {
 }
 
 /* ============================== VENDAS ================================== */
+/* ============================== DÍVIDAS ================================= */
+function Dividas({ db, set }) {
+  const [form, setForm] = useState(false);
+  const loans = db.loans || [];
+  const parceladas = loans.filter((l) => l.kind === "parcelada" && !l.settled);
+  const avista = loans.filter((l) => l.kind === "avista" && !l.settled);
+
+  const totalDevo = loans.filter((l) => !l.settled).reduce((a, l) => a + (l.total - l.paidAmount), 0);
+
+  const pagar = async (loan, amount) => {
+    // update otimista
+    const isParc = loan.kind === "parcelada";
+    const novoPago = isParc
+      ? loan.paidAmount + loan.total / loan.installments
+      : Math.min(loan.total, loan.paidAmount + (amount || 0));
+    const novasParc = isParc ? loan.paidInstallments + 1 : loan.paidInstallments;
+    const settled = isParc ? novasParc >= loan.installments : novoPago >= loan.total;
+    set({ loans: loans.map((l) => l.id === loan.id ? { ...l, paidAmount: novoPago, paidInstallments: novasParc, settled } : l) });
+    // persiste + gera gasto automático
+    const { gasto } = await DB.payLoan(loan, amount);
+    if (gasto) set({ expenses: [gasto, ...db.expenses], loans: loans.map((l) => l.id === loan.id ? { ...l, paidAmount: novoPago, paidInstallments: novasParc, settled } : l) });
+  };
+  const excluir = (id) => { set({ loans: loans.filter((l) => l.id !== id) }); DB.delLoan(id); };
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <Row><H2>Dívidas</H2><button className="btnGhost" onClick={() => setForm((s) => !s)}>{form ? "Fechar" : "+ Dívida"}</button></Row>
+
+      {/* total geral */}
+      <Card glow={T.red}>
+        <CardTitle>Total que devo</CardTitle>
+        <p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 30, color: T.red, letterSpacing: "-0.02em" }}>{fmt(totalDevo)}</p>
+        <p style={{ margin: "4px 0 0", fontSize: 12, color: T.text2 }}>{parceladas.length} parcelada(s) · {avista.length} à vista</p>
+      </Card>
+
+      {form && <LoanForm onSave={async (l) => { setForm(false); const { data } = await DB.addLoan(l); set({ loans: [data || { id: uid(), paidAmount: 0, paidInstallments: 0, settled: false, ...l }, ...loans] }); }} />}
+
+      {/* PARCELADAS */}
+      <Card>
+        <CardTitle>Parceladas</CardTitle>
+        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+          {parceladas.length === 0 && <Empty text="Nenhuma dívida parcelada." />}
+          {parceladas.map((l) => {
+            const valParc = l.total / l.installments;
+            const restam = l.installments - l.paidInstallments;
+            const pct = (l.paidInstallments / l.installments) * 100;
+            return (
+              <div key={l.id} style={{ background: T.raised, border: `1px solid ${T.border}`, borderRadius: 12, padding: 12 }}>
+                <Row>
+                  <div><p className="rt">{l.title}</p><p className="rs">{fmt(valParc)} × {l.installments}{l.creditor ? " · " + l.creditor : ""}{l.due ? " · vence " + dueLabel(l.due).text.toLowerCase() : ""}</p></div>
+                  <button className="link" style={{ color: T.text3, fontSize: 18 }} onClick={() => excluir(l.id)}>×</button>
+                </Row>
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: "flex", gap: 3 }}>
+                    {Array.from({ length: l.installments }).map((_, i) => <div key={i} style={{ flex: 1, height: 5, borderRadius: 2, background: i < l.paidInstallments ? T.green : "rgba(255,255,255,0.08)" }} />)}
+                  </div>
+                  <Row style={{ marginTop: 8 }}>
+                    <span style={{ fontSize: 11, color: T.text2, fontFamily: T.mono }}>{restam > 0 ? `${l.paidInstallments}/${l.installments} pagas · falta ${fmt(valParc * restam)}` : "Quitada ✅"}</span>
+                    {restam > 0 && <button className="btnPaySm" onClick={() => pagar(l)}>Paguei 1 parcela</button>}
+                  </Row>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* À VISTA */}
+      <Card>
+        <CardTitle>À vista</CardTitle>
+        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+          {avista.length === 0 && <Empty text="Nenhuma dívida à vista." />}
+          {avista.map((l) => <AvistaRow key={l.id} loan={l} onPay={pagar} onDel={excluir} />)}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function AvistaRow({ loan, onPay, onDel }) {
+  const [paying, setPaying] = useState(false);
+  const [val, setVal] = useState("");
+  const restam = loan.total - loan.paidAmount;
+  const pct = (loan.paidAmount / loan.total) * 100;
+  const registrar = () => { const a = parseFloat(val) || 0; if (a <= 0) return; onPay(loan, a); setPaying(false); setVal(""); };
+  return (
+    <div style={{ background: T.raised, border: `1px solid ${T.border}`, borderRadius: 12, padding: 12 }}>
+      <Row>
+        <div><p className="rt">{loan.title}</p><p className="rs">{loan.creditor ? loan.creditor + " · " : ""}{loan.due ? "vence " + dueLabel(loan.due).text.toLowerCase() : "sem prazo"}</p></div>
+        <button className="link" style={{ color: T.text3, fontSize: 18 }} onClick={() => onDel(loan.id)}>×</button>
+      </Row>
+      <div style={{ marginTop: 8 }}>
+        <div className="bar"><div className="barFill" style={{ width: `${pct}%`, background: T.red }} /></div>
+        <span style={{ fontSize: 11, color: T.text2, fontFamily: T.mono, display: "block", marginTop: 6 }}>{fmt(loan.paidAmount)} de {fmt(loan.total)} · falta {fmt(restam)}</span>
+      </div>
+      {paying ? (
+        <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+          <input className="input" type="number" autoFocus placeholder="Valor pago" value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && registrar()} style={{ flex: 1 }} />
+          <button className="btnPay" onClick={registrar}>OK</button>
+          <button className="link" onClick={() => { setPaying(false); setVal(""); }}>×</button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button className="btnPaySm" onClick={() => setPaying(true)}>Registrar pagamento</button>
+          <button className="btnPaySm" style={{ background: "rgba(52,211,153,0.14)", color: T.green, borderColor: "rgba(52,211,153,0.35)" }} onClick={() => onPay(loan, restam)}>Quitar tudo</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LoanForm({ onSave }) {
+  const [f, setF] = useState({ title: "", creditor: "", kind: "parcelada", total: "", installments: 12, due: "", cat: "Pessoal" });
+  const up = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const isParc = f.kind === "parcelada";
+  const perParc = f.total && f.installments ? parseFloat(f.total) / f.installments : 0;
+  return (
+    <Card style={{ display: "grid", gap: 12 }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button className="pchip" style={{ flex: 1, borderColor: isParc ? T.accent : T.border, color: isParc ? T.accentLight : T.text2 }} onClick={() => up("kind", "parcelada")}>Parcelada</button>
+        <button className="pchip" style={{ flex: 1, borderColor: !isParc ? T.accent : T.border, color: !isParc ? T.accentLight : T.text2 }} onClick={() => up("kind", "avista")}>À vista</button>
+      </div>
+      <Field label="O que é"><input className="input" value={f.title} onChange={(e) => up("title", e.target.value)} placeholder={isParc ? "ex: Curso de tráfego" : "ex: Empréstimo João"} /></Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Valor total"><input className="input" type="number" value={f.total} onChange={(e) => up("total", e.target.value)} placeholder="2000" /></Field>
+        {isParc && <Field label="Parcelas"><input className="input" type="number" min={1} value={f.installments} onChange={(e) => up("installments", Math.max(1, +e.target.value || 1))} /></Field>}
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Pra quem (opcional)"><input className="input" value={f.creditor} onChange={(e) => up("creditor", e.target.value)} placeholder="ex: banco, fulano" /></Field>
+        <Field label={isParc ? "Vencimento próx." : "Vencimento"}><input className="input" type="date" value={f.due} onChange={(e) => up("due", e.target.value)} /></Field>
+      </div>
+      <Field label="Categoria do gasto"><select className="input" value={f.cat} onChange={(e) => up("cat", e.target.value)}>{CATS_OUT.map((c) => <option key={c}>{c}</option>)}</select></Field>
+      {isParc && perParc > 0 && <p style={{ margin: 0, fontSize: 12, color: T.accentLight, fontFamily: T.mono }}>{f.installments}× de {fmt(perParc)} · cada parcela paga vira gasto</p>}
+      <button className="btnPrimary" onClick={() => f.title && f.total && onSave({ ...f, total: parseFloat(f.total), installments: isParc ? +f.installments : 1, due: f.due || null })}>Adicionar dívida</button>
+    </Card>
+  );
+}
+
 function Vendas({ db, set }) {
   const [range, setRange] = useState("hoje");
   const filtered = useMemo(() => filterByRange(db.sales, range), [db.sales, range]);
@@ -1008,8 +1148,8 @@ function StyleTag() {
       .fab { position: fixed; bottom: 96px; right: 16px; width: 52px; height: 52px; border-radius: 17px; border: none; background: linear-gradient(135deg, ${T.accent}, ${T.accentLight}); color: #fff; font-size: 27px; font-weight: 300; cursor: pointer; box-shadow: 0 8px 24px var(--acc-42); z-index: 45; display: flex; align-items: center; justify-content: center; }
       .fab:active { transform: scale(0.92); }
       .nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: center; padding: 0 10px 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); z-index: 30; pointer-events: none; }
-      .navInner { pointer-events: auto; display: grid; grid-template-columns: repeat(5,1fr); gap: 4px; width: 100%; padding: 6px; border-radius: 20px; background: rgba(10,10,18,0.96); border: 1px solid var(--acc-18); box-shadow: 0 8px 40px rgba(0,0,0,0.6); backdrop-filter: blur(20px); }
-      .navBtn { height: 52px; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; font-family: inherit; transition: all .15s; padding: 0 2px; }
+      .navInner { pointer-events: auto; display: grid; grid-template-columns: repeat(6,1fr); gap: 3px; width: 100%; padding: 6px; border-radius: 20px; background: rgba(10,10,18,0.96); border: 1px solid var(--acc-18); box-shadow: 0 8px 40px rgba(0,0,0,0.6); backdrop-filter: blur(20px); }
+      .navBtn { height: 50px; border-radius: 13px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; font-family: inherit; transition: all .15s; padding: 0 1px; }
       .navBtn:active { transform: scale(0.94); }
       .seg { display: flex; background: rgba(255,255,255,0.04); border-radius: 11px; padding: 3px; }
       .segBtn { border: none; padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }

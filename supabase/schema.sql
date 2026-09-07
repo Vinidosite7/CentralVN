@@ -145,3 +145,19 @@ create policy own_all on profiles for all using (auth.uid() = user_id) with chec
 -- ============================================================================
 alter table debts add column if not exists paid numeric not null default 0;
 alter table card_purchases add column if not exists recurring boolean not null default false;
+
+-- ============================================================================
+-- LOANS (aba Dívidas — à vista + parcelada)
+-- ============================================================================
+create table if not exists loans (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  title text not null, creditor text, kind text not null default 'avista',
+  total numeric not null, installments int not null default 1,
+  paid_installments int not null default 0, paid_amount numeric not null default 0,
+  due date, cat text default 'Pessoal', settled boolean not null default false,
+  created_at timestamptz default now()
+);
+alter table loans enable row level security;
+drop policy if exists own_all on loans;
+create policy own_all on loans for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
