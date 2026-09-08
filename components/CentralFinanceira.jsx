@@ -229,6 +229,7 @@ export default function CentralFinanceira({ userId }) {
     ["hoje", "Hoje", "◎"],
     ["contas", "Contas", "▤"],
     ["dividas", "Dívidas", "◈"],
+    ["futuro", "Futuro", "◔"],
     ["vendas", "Vendas", "↗"],
     ["cartoes", "Cartões", "▦"],
     ["perfil", "Perfil", "☺"],
@@ -267,7 +268,7 @@ export default function CentralFinanceira({ userId }) {
                 <h1 className="brand">Central <span style={{ color: T.accent }}>VN</span></h1>
                 <span style={{ fontSize: 12, color: T.text3 }}>{displayName} · {new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}</span>
               </div>
-              <p className="pageTitle">{{ hoje: greeting() + ", " + displayName, contas: "Contas a pagar", dividas: "Dívidas", vendas: "Vendas", cartoes: "Cartões & saldos", perfil: "Perfil" }[tab]}</p>
+              <p className="pageTitle">{{ hoje: greeting() + ", " + displayName, contas: "Contas a pagar", dividas: "Dívidas", futuro: "Futuro", vendas: "Vendas", cartoes: "Cartões & saldos", perfil: "Perfil" }[tab]}</p>
             </div>
             <div style={{ textAlign: "right" }}>
               <p style={{ margin: 0, fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 1 }}>Saldo real</p>
@@ -279,6 +280,7 @@ export default function CentralFinanceira({ userId }) {
             {tab === "hoje" && <Hoje {...{ urgentBills, realBalance, cashOnHand, billsTotal, inToday, outToday, salesToday, owe, owed }} onPay={(id) => { set({ bills: db.bills.map((b) => b.id === id ? { ...b, paid: true } : b) }); DB.setBillPaid(id, true); }} goto={setTab} />}
             {tab === "contas" && <Contas db={db} set={set} displayName={displayName} />}
             {tab === "dividas" && <Dividas db={db} set={set} />}
+            {tab === "futuro" && <Futuro db={db} />}
             {tab === "vendas" && <Vendas db={db} set={set} />}
             {tab === "cartoes" && <Cartoes db={db} set={set} owe={owe} owed={owed} onOpen={setOpenCard} onNew={() => setQuick("card")} />}
             {tab === "perfil" && <Perfil profile={profile} saveProfile={saveProfile} />}
@@ -313,8 +315,8 @@ export default function CentralFinanceira({ userId }) {
         <div className="navInner">
           {NAV.map(([id, label, icon]) => (
             <button key={id} onClick={() => setTab(id)} className="navBtn" style={{ background: tab === id ? "var(--acc-18)" : "rgba(255,255,255,0.025)", border: `1px solid ${tab === id ? "var(--acc-42)" : T.border}`, color: tab === id ? T.accent : "#5d6378", boxShadow: tab === id ? `0 0 16px var(--acc-18)` : "none" }}>
-              <span style={{ fontSize: 16 }}>{icon}</span>
-              <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: "-0.02em", color: tab === id ? "#E2E8F0" : "#68708a" }}>{label}</span>
+              <span style={{ fontSize: 15 }}>{icon}</span>
+              <span style={{ fontSize: 7.5, fontWeight: 800, letterSpacing: "-0.03em", color: tab === id ? "#E2E8F0" : "#68708a" }}>{label}</span>
             </button>
           ))}
         </div>
@@ -680,6 +682,120 @@ function LoanForm({ onSave }) {
       {isParc && perParc > 0 && <p style={{ margin: 0, fontSize: 12, color: T.accentLight, fontFamily: T.mono }}>{f.installments}× de {fmt(perParc)} · cada parcela paga vira gasto</p>}
       <button className="btnPrimary" onClick={() => f.title && f.total && onSave({ ...f, total: parseFloat(f.total), installments: isParc ? +f.installments : 1, due: f.due || null })}>Adicionar dívida</button>
     </Card>
+  );
+}
+
+/* ============================== FUTURO ================================= */
+function Futuro({ db }) {
+  const caixaHoje = (db.balances || []).reduce((a, b) => a + b.amount, 0);
+
+  // monta eventos de saída dos próximos 30 dias
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const dias = [];
+  for (let i = 0; i <= 30; i++) {
+    const d = new Date(hoje); d.setDate(d.getDate() + i);
+    dias.push(d.toISOString().slice(0, 10));
+  }
+
+  // saídas: contas a pagar não pagas (inclui faturas de cartão que viraram bill) + parcelas de dívida
+  const saidasPorDia = {};
+  const eventos = []; // {date, label, amount}
+  (db.bills || []).filter((b) => !b.paid).forEach((b) => {
+    if (b.due >= dias[0] && b.due <= dias[dias.length - 1]) {
+      saidasPorDia[b.due] = (saidasPorDia[b.due] || 0) + b.amount;
+      eventos.push({ date: b.due, label: b.title, amount: b.amount });
+    }
+  });
+  // parcelas de dívida com vencimento no período (a próxima parcela)
+  (db.loans || []).filter((l) => !l.settled && l.due).forEach((l) => {
+    if (l.due >= dias[0] && l.due <= dias[dias.length - 1]) {
+      const val = l.kind === "parcelada" ? l.total / l.installments : (l.total - l.paidAmount);
+      saidasPorDia[l.due] = (saidasPorDia[l.due] || 0) + val;
+      eventos.push({ date: l.due, label: l.title + (l.kind === "parcelada" ? " (parcela)" : ""), amount: val });
+    }
+  });
+
+  // calcula saldo acumulado dia a dia
+  let saldo = caixaHoje;
+  const pontos = dias.map((d) => {
+    saldo -= (saidasPorDia[d] || 0);
+    return { date: d, saldo };
+  });
+
+  const menor = Math.min(caixaHoje, ...pontos.map((p) => p.saldo));
+  const maior = Math.max(caixaHoje, ...pontos.map((p) => p.saldo));
+  const range = Math.max(1, maior - menor);
+  const saldoFinal = pontos[pontos.length - 1].saldo;
+  const primeiroNegativo = pontos.find((p) => p.saldo < 0);
+
+  // pontos pro gráfico SVG
+  const W = 320, H = 120, pad = 4;
+  const coordY = (v) => H - pad - ((v - menor) / range) * (H - pad * 2);
+  const coordX = (i) => pad + (i / (pontos.length - 1)) * (W - pad * 2);
+  const linha = pontos.map((p, i) => `${coordX(i)},${coordY(p.saldo)}`).join(" ");
+  const zeroY = menor < 0 && maior > 0 ? coordY(0) : null;
+
+  const eventosOrdenados = eventos.sort((a, b) => a.date.localeCompare(b.date));
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      {/* resumo */}
+      <div className="gridWrap" style={{ display: "grid", gap: 12 }}>
+        <Card glow={saldoFinal >= 0 ? T.green : T.red}>
+          <CardTitle>Saldo em 30 dias</CardTitle>
+          <p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 28, letterSpacing: "-0.02em", color: saldoFinal >= 0 ? T.green : T.red }}>{fmt(saldoFinal)}</p>
+          <p style={{ margin: "4px 0 0", fontSize: 12, color: T.text2 }}>Caixa hoje: <b style={{ fontFamily: T.mono, color: T.cyan }}>{fmt(caixaHoje)}</b></p>
+        </Card>
+        <Card glow={primeiroNegativo ? T.red : undefined}>
+          <CardTitle>Alerta de caixa</CardTitle>
+          {primeiroNegativo ? (
+            <>
+              <p style={{ margin: "4px 0 0", fontSize: 14, color: T.red, fontWeight: 700 }}>Fica negativo dia {primeiroNegativo.date.slice(8, 10)}/{primeiroNegativo.date.slice(5, 7)}</p>
+              <p style={{ margin: "4px 0 0", fontSize: 12, color: T.text2 }}>Chega em {fmt(primeiroNegativo.saldo)}. Precisa entrar dinheiro antes.</p>
+            </>
+          ) : (
+            <p style={{ margin: "4px 0 0", fontSize: 14, color: T.green }}>✅ Caixa positivo o mês todo. Tranquilo.</p>
+          )}
+        </Card>
+      </div>
+
+      {/* gráfico */}
+      <Card>
+        <CardTitle>Saldo dia a dia · 30 dias</CardTitle>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 140, marginTop: 10 }} preserveAspectRatio="none">
+          {zeroY != null && <line x1="0" y1={zeroY} x2={W} y2={zeroY} stroke={T.red} strokeWidth="0.5" strokeDasharray="3 3" opacity="0.5" />}
+          <defs>
+            <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--acc)" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="var(--acc)" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <polygon points={`${coordX(0)},${H} ${linha} ${coordX(pontos.length - 1)},${H}`} fill="url(#fill)" />
+          <polyline points={linha} fill="none" stroke="var(--acc)" strokeWidth="2" strokeLinejoin="round" />
+        </svg>
+        <Row style={{ marginTop: 4 }}>
+          <span style={{ fontSize: 10, color: T.text3 }}>hoje</span>
+          <span style={{ fontSize: 10, color: T.text3 }}>+30 dias</span>
+        </Row>
+      </Card>
+
+      {/* próximas saídas */}
+      <Card>
+        <CardTitle>Próximas saídas</CardTitle>
+        <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+          {eventosOrdenados.length === 0 && <Empty text="Nada a pagar nos próximos 30 dias. 🎉" />}
+          {eventosOrdenados.map((e, i) => {
+            const dl = dueLabel(e.date);
+            return (
+              <Row key={i}>
+                <div><p className="rt" style={{ fontSize: 14 }}>{e.label}</p><p className="rs" style={{ color: tone(dl.tone) }}>{dl.text}</p></div>
+                <Num style={{ color: T.red }}>-{fmt(e.amount)}</Num>
+              </Row>
+            );
+          })}
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -1196,8 +1312,8 @@ function StyleTag() {
       .fab { position: fixed; bottom: 96px; right: 16px; width: 52px; height: 52px; border-radius: 17px; border: none; background: linear-gradient(135deg, ${T.accent}, ${T.accentLight}); color: #fff; font-size: 27px; font-weight: 300; cursor: pointer; box-shadow: 0 8px 24px var(--acc-42); z-index: 45; display: flex; align-items: center; justify-content: center; }
       .fab:active { transform: scale(0.92); }
       .nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: center; padding: 0 10px 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); z-index: 30; pointer-events: none; }
-      .navInner { pointer-events: auto; display: grid; grid-template-columns: repeat(6,1fr); gap: 3px; width: 100%; padding: 6px; border-radius: 20px; background: rgba(10,10,18,0.96); border: 1px solid var(--acc-18); box-shadow: 0 8px 40px rgba(0,0,0,0.6); backdrop-filter: blur(20px); }
-      .navBtn { height: 50px; border-radius: 13px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; font-family: inherit; transition: all .15s; padding: 0 1px; }
+      .navInner { pointer-events: auto; display: grid; grid-template-columns: repeat(7,1fr); gap: 2px; width: 100%; padding: 5px; border-radius: 18px; background: rgba(10,10,18,0.96); border: 1px solid var(--acc-18); box-shadow: 0 8px 40px rgba(0,0,0,0.6); backdrop-filter: blur(20px); }
+      .navBtn { height: 48px; border-radius: 11px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; cursor: pointer; font-family: inherit; transition: all .15s; padding: 0; overflow: hidden; }
       .navBtn:active { transform: scale(0.94); }
       .seg { display: flex; background: rgba(255,255,255,0.04); border-radius: 11px; padding: 3px; }
       .segBtn { border: none; padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
