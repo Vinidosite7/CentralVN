@@ -84,6 +84,33 @@ Deno.serve(async (req) => {
     const { data: prof } = await supabase.from("profiles").select("name").eq("user_id", userId).maybeSingle();
     const nome = (prof?.name || "").split(" ")[0] || "Vini";
 
+    // ===== ANTI-ESQUECIMENTO: recria contas recorrentes no dia 1º (por volta das 9h) =====
+    if (dayOfMonth === 1 && hour === 9) {
+      // pega recorrentes distintas por título (a mais recente de cada)
+      const { data: recorrentes } = await supabase
+        .from("bills").select("*")
+        .eq("user_id", userId).eq("recurring", true)
+        .order("created_at", { ascending: false });
+      const vistos = new Set();
+      for (const r of recorrentes ?? []) {
+        if (vistos.has(r.title)) continue; // só a mais recente de cada título
+        vistos.add(r.title);
+        const dia = Math.min(r.due_day || 10, 28);
+        const novoDue = `${thisMonth}-${String(dia).padStart(2, "0")}`;
+        // já existe conta desse título vencendo neste mês? então não duplica
+        const { data: existe } = await supabase.from("bills")
+          .select("id").eq("user_id", userId).eq("title", r.title)
+          .gte("due", `${thisMonth}-01`).lte("due", `${thisMonth}-31`).limit(1);
+        if (!existe || existe.length === 0) {
+          await supabase.from("bills").insert({
+            user_id: userId, title: r.title, amount: r.amount, due: novoDue,
+            method: r.method, cat: r.cat, paid: false, recurring: true,
+            due_day: r.due_day, last_generated: thisMonth,
+          });
+        }
+      }
+    }
+
     const { data: bills } = await supabase.from("bills").select("title, amount, due").eq("user_id", userId).eq("paid", false);
     const { data: balances } = await supabase.from("balances").select("amount").eq("user_id", userId);
     const caixa = (balances ?? []).reduce((a, b) => a + Number(b.amount), 0);

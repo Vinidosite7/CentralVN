@@ -1021,15 +1021,27 @@ function QuickExpense({ onClose, onSave }) {
   );
 }
 function BillForm({ onSave }) {
-  const [f, setF] = useState({ title: "", amount: "", due: todayISO(), method: "Boleto", cat: "Empresa", recurring: false });
+  const [f, setF] = useState({ title: "", amount: "", due: todayISO(), method: "Boleto", cat: "Empresa", recurring: false, dueDay: 10 });
   const up = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  // quando recorrente, o vencimento deste mês é calculado pelo dia escolhido
+  const dueFromDay = () => {
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth(), Math.min(f.dueDay, 28));
+    return d.toISOString().slice(0, 10);
+  };
   return (
     <Card style={{ display: "grid", gap: 12 }}>
-      <Field label="Título"><input className="input" value={f.title} onChange={(e) => up("title", e.target.value)} placeholder="ex: Fatura Nubank" /></Field>
-      <div style={{ display: "flex", gap: 10 }}><Field label="Valor"><input className="input" type="number" value={f.amount} onChange={(e) => up("amount", e.target.value)} placeholder="0,00" /></Field><Field label="Vencimento"><input className="input" type="date" value={f.due} onChange={(e) => up("due", e.target.value)} /></Field></div>
+      <Field label="Título"><input className="input" value={f.title} onChange={(e) => up("title", e.target.value)} placeholder="ex: Aluguel, Contador" /></Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Valor"><input className="input" type="number" value={f.amount} onChange={(e) => up("amount", e.target.value)} placeholder="0,00" /></Field>
+        {f.recurring
+          ? <Field label="Vence todo dia"><input className="input" type="number" min={1} max={31} value={f.dueDay} onChange={(e) => up("dueDay", Math.min(31, Math.max(1, +e.target.value || 1)))} /></Field>
+          : <Field label="Vencimento"><input className="input" type="date" value={f.due} onChange={(e) => up("due", e.target.value)} /></Field>}
+      </div>
       <div style={{ display: "flex", gap: 10 }}><Field label="Forma"><select className="input" value={f.method} onChange={(e) => up("method", e.target.value)}>{PAY_METHODS.map((m) => <option key={m}>{m}</option>)}</select></Field><Field label="Categoria"><select className="input" value={f.cat} onChange={(e) => up("cat", e.target.value)}>{CATS_OUT.map((c) => <option key={c}>{c}</option>)}</select></Field></div>
-      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: T.text2 }}><input type="checkbox" checked={f.recurring} onChange={(e) => up("recurring", e.target.checked)} /> Recorrente (todo mês)</label>
-      <button className="btnPrimary" onClick={() => f.amount && onSave({ ...f, amount: parseFloat(f.amount) })}>Adicionar conta</button>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: T.text2 }}><input type="checkbox" checked={f.recurring} onChange={(e) => up("recurring", e.target.checked)} /> Recorrente — nasce sozinha todo mês ↻</label>
+      {f.recurring && <p style={{ margin: 0, fontSize: 11, color: T.accentLight }}>Todo mês a conta reaparece com vencimento no dia {f.dueDay}. Você nunca recadastra.</p>}
+      <button className="btnPrimary" onClick={() => f.amount && onSave({ ...f, amount: parseFloat(f.amount), due: f.recurring ? dueFromDay() : f.due })}>Adicionar conta</button>
     </Card>
   );
 }
