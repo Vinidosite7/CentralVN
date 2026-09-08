@@ -111,6 +111,38 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ===== FATURA DO CARTÃO vira conta a pagar no dia de fechamento (9h) =====
+    if (hour === 9) {
+      const { data: meusCards } = await supabase.from("cards").select("*").eq("user_id", userId);
+      if (meusCards?.length) {
+        const { data: comprasCartao } = await supabase.from("card_purchases")
+          .select("card_id, total, installments, start_month, paid, recurring").eq("user_id", userId);
+        for (const c of meusCards) {
+          if (c.closing === dayOfMonth) {
+            const valorFatura = monthBill(comprasCartao ?? [], c.id, thisMonth);
+            if (valorFatura > 0) {
+              const diaVenc = Math.min(c.due_day || 10, 28);
+              // vencimento: se o dia de venc é <= fechamento, é no mês que vem; senão neste mês
+              const vencMes = (c.due_day <= c.closing) ? addMonthsKey(thisMonth, 1) : thisMonth;
+              const vencDate = `${vencMes}-${String(diaVenc).padStart(2, "0")}`;
+              const titulo = `Fatura ${c.name}`;
+              // evita duplicar: já existe fatura desse cartão vencendo nesse mês?
+              const { data: jaExiste } = await supabase.from("bills")
+                .select("id").eq("user_id", userId).eq("title", titulo)
+                .gte("due", `${vencMes}-01`).lte("due", `${vencMes}-31`).limit(1);
+              if (!jaExiste || jaExiste.length === 0) {
+                await supabase.from("bills").insert({
+                  user_id: userId, title: titulo, amount: valorFatura, due: vencDate,
+                  method: "Cartão", cat: "Empresa", paid: false, recurring: false,
+                });
+                notes.push({ title: "💳 Fatura fechou", body: `${c.name}: ${fmt(valorFatura)}. Adicionei nas contas, vence dia ${diaVenc}.` });
+              }
+            }
+          }
+        }
+      }
+    }
+
     const { data: bills } = await supabase.from("bills").select("title, amount, due").eq("user_id", userId).eq("paid", false);
     const { data: balances } = await supabase.from("balances").select("amount").eq("user_id", userId);
     const caixa = (balances ?? []).reduce((a, b) => a + Number(b.amount), 0);
