@@ -686,29 +686,60 @@ function LoanForm({ onSave }) {
 function Vendas({ db, set }) {
   const [range, setRange] = useState("hoje");
   const filtered = useMemo(() => filterByRange(db.sales, range), [db.sales, range]);
+  const expFiltered = useMemo(() => filterByRange(db.expenses, range).filter((e) => e.cat === "Tráfego"), [db.expenses, range]);
+
   const total = filtered.reduce((a, s) => a + s.amount, 0);
-  const byPlat = PLATFORMS.map((p) => ({ ...p, total: filtered.filter((s) => s.platform === p.id).reduce((a, s) => a + s.amount, 0) }));
-  const max = Math.max(1, ...byPlat.map((p) => p.total));
-  const traffic = filterByRange(db.expenses, range).filter((e) => e.cat === "Tráfego").reduce((a, e) => a + e.amount, 0);
-  const roi = traffic > 0 ? total / traffic : null;
+  const trafficTotal = expFiltered.reduce((a, e) => a + e.amount, 0);
+  const lucroTotal = total - trafficTotal;
+  const roiTotal = trafficTotal > 0 ? total / trafficTotal : null;
+
+  // por plataforma: faturamento, gasto, lucro, roas
+  const byPlat = PLATFORMS.map((p) => {
+    const fat = filtered.filter((s) => s.platform === p.id).reduce((a, s) => a + s.amount, 0);
+    const gasto = expFiltered.filter((e) => e.platform === p.id).reduce((a, e) => a + e.amount, 0);
+    const lucro = fat - gasto;
+    const roas = gasto > 0 ? fat / gasto : null;
+    return { ...p, fat, gasto, lucro, roas };
+  }).filter((p) => p.fat > 0 || p.gasto > 0); // só mostra plataformas com movimento
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <Row><H2>Vendas</H2><Seg value={range} setValue={setRange} options={[["hoje", "Hoje"], ["7d", "7d"], ["mes", "Mês"]]} /></Row>
+
+      {/* Resumo geral */}
       <Card>
-        <Row style={{ alignItems: "baseline" }}>
-          <div><CardTitle>Faturamento</CardTitle><p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 30, letterSpacing: "-0.02em", color: T.green }}>{fmt(total)}</p></div>
-          {roi && <div style={{ textAlign: "right" }}><p style={{ margin: 0, fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 1 }}>ROAS</p><p style={{ margin: 0, fontFamily: T.mono, fontWeight: 700, fontSize: 21, letterSpacing: "-0.01em", color: roi >= 1.5 ? T.green : T.yellow }}>{roi.toFixed(2)}x</p></div>}
-        </Row>
-        <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><CardTitle>Faturamento</CardTitle><p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 26, letterSpacing: "-0.02em", color: T.green }}>{fmt(total)}</p></div>
+          <div style={{ textAlign: "right" }}><CardTitle>Lucro real</CardTitle><p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 26, letterSpacing: "-0.02em", color: lucroTotal >= 0 ? T.green : T.red }}>{fmt(lucroTotal)}</p></div>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <Pill label="Gasto tráfego" value={"-" + fmt(trafficTotal)} color={T.red} />
+          <Pill label="ROAS geral" value={roiTotal ? roiTotal.toFixed(2) + "x" : "—"} color={roiTotal >= 1.5 ? T.green : T.yellow} />
+        </div>
+      </Card>
+
+      {/* Por plataforma — os 4 números */}
+      {byPlat.length === 0 ? (
+        <Card><Empty text="Sem movimento no período. Registra vendas e gastos de tráfego." /></Card>
+      ) : (
+        <div className="cardsGrid" style={{ display: "grid", gap: 12 }}>
           {byPlat.map((p) => (
-            <div key={p.id}>
-              <Row style={{ fontSize: 12, marginBottom: 4 }}><span style={{ color: p.color, fontWeight: 600 }}>{p.label}</span><Num sm>{fmt(p.total)}</Num></Row>
-              <div className="bar"><div className="barFill" style={{ width: `${(p.total / max) * 100}%`, background: p.color }} /></div>
-            </div>
+            <Card key={p.id} glow={p.color}>
+              <Row style={{ alignItems: "baseline" }}>
+                <span style={{ color: p.color, fontWeight: 700, fontSize: 16, fontFamily: T.display }}>{p.label}</span>
+                <span style={{ fontFamily: T.mono, fontWeight: 700, fontSize: 14, color: p.roas == null ? T.text3 : p.roas >= 1.5 ? T.green : p.roas >= 1 ? T.yellow : T.red }}>{p.roas != null ? p.roas.toFixed(2) + "x" : "—"} <span style={{ fontSize: 10, color: T.text3 }}>ROAS</span></span>
+              </Row>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 12 }}>
+                <Stat label="Faturou" value={fmt(p.fat)} color={T.green} />
+                <Stat label="Gastou" value={fmt(p.gasto)} color={T.red} />
+                <Stat label="Lucro" value={fmt(p.lucro)} color={p.lucro >= 0 ? T.text1 : T.red} />
+              </div>
+            </Card>
           ))}
         </div>
-        {traffic > 0 && <p style={{ margin: "12px 0 0", fontSize: 12, color: T.text2 }}>Tráfego no período: <b style={{ color: T.red, fontFamily: T.mono }}>{fmt(traffic)}</b></p>}
-      </Card>
+      )}
+
+      {/* Lançamentos */}
       <Card>
         <CardTitle>Lançamentos</CardTitle>
         <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
@@ -969,15 +1000,20 @@ function QuickSale({ onClose, onSave }) {
   );
 }
 function QuickExpense({ onClose, onSave }) {
-  const [title, setTitle] = useState(""); const [amount, setAmount] = useState(""); const [cat, setCat] = useState("Tráfego"); const [method, setMethod] = useState("PIX");
+  const [title, setTitle] = useState(""); const [amount, setAmount] = useState(""); const [cat, setCat] = useState("Tráfego"); const [method, setMethod] = useState("PIX"); const [platform, setPlatform] = useState("kwai");
   const ref = useRef(); useEffect(() => ref.current?.focus(), []);
-  const save = () => { if (!amount) return; onSave({ date: todayISO(), title: title || cat, amount: parseFloat(amount), cat, method }); };
+  const save = () => { if (!amount) return; onSave({ date: todayISO(), title: title || cat, amount: parseFloat(amount), cat, method, platform: cat === "Tráfego" ? platform : null }); };
   return (
     <Sheet onClose={onClose} title="Novo gasto">
       <div style={{ display: "grid", gap: 14 }}>
         <Field label="Valor"><input ref={ref} className="bigInput" type="number" inputMode="decimal" placeholder="0,00" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} /></Field>
         <Field label="Descrição (opcional)"><input className="input" placeholder="ex: Kwai bid 8" value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{CATS_OUT.map((c) => <button key={c} onClick={() => setCat(c)} className="pchip" style={{ borderColor: cat === c ? T.accent : T.border, color: cat === c ? T.accentLight : T.text2 }}>{c}</button>)}</div>
+        {cat === "Tráfego" && (
+          <Field label="Plataforma do anúncio">
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{PLATFORMS.map((p) => <button key={p.id} onClick={() => setPlatform(p.id)} className="pchip" style={{ borderColor: platform === p.id ? p.color : T.border, background: platform === p.id ? p.color + "22" : "transparent", color: platform === p.id ? p.color : T.text2 }}>{p.label}</button>)}</div>
+          </Field>
+        )}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{PAY_METHODS.map((m) => <button key={m} onClick={() => setMethod(m)} className="pchip" style={{ borderColor: method === m ? T.cyan : T.border, color: method === m ? T.cyan : T.text2 }}>{m}</button>)}</div>
         <button className="btnPrimary" onClick={save}>Salvar gasto</button>
       </div>
