@@ -869,29 +869,6 @@ function Vendas({ db, set }) {
 
 /* ============================== CARTÕES ================================= */
 function Cartoes({ db, set, owe, owed, onOpen, onNew }) {
-  useEffect(() => {
-    const cards = () => Array.from(document.querySelectorAll(".glareCard"));
-    // desktop: glare segue o mouse sobre cada cartão
-    const onMove = (e) => {
-      cards().forEach((el) => {
-        const r = el.getBoundingClientRect();
-        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-          const pct = ((e.clientX - r.left) / r.width) * 100;
-          el.style.setProperty("--glare", pct + "%");
-        }
-      });
-    };
-    // mobile: glare reage à inclinação do aparelho
-    const onTilt = (e) => {
-      const g = e.gamma || 0; // -90..90 (esquerda-direita)
-      const pct = Math.max(10, Math.min(90, 50 + g));
-      cards().forEach((el) => el.style.setProperty("--glare", pct + "%"));
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("deviceorientation", onTilt);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("deviceorientation", onTilt); };
-  }, [db.cards]);
-
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <Row><H2>Cartões & saldos</H2><button className="btnGhost" onClick={onNew}>+ Cartão</button></Row>
@@ -905,8 +882,7 @@ function Cartoes({ db, set, owe, owed, onOpen, onNew }) {
           const pct = Math.min(100, (used / c.limit) * 100);
           const theme = CARD_THEMES.find((t) => t.id === c.theme) || CARD_THEMES[0];
           return (
-            <button key={c.id} onClick={() => onOpen(c.id)} className="creditCard glareCard" style={{ background: theme.grad, boxShadow: `0 14px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.06), 0 0 30px ${theme.glow}22` }}>
-              <div className="glareLayer" />
+            <button key={c.id} onClick={() => onOpen(c.id)} className="creditCard" style={{ background: theme.grad, boxShadow: `0 14px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.06), 0 0 30px ${theme.glow}22` }}>
               <div style={{ position: "absolute", top: 0, right: 0, width: 180, height: 180, background: `radial-gradient(circle at 70% 30%, ${theme.glow}33, transparent 60%)`, pointerEvents: "none" }} />
               <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", height: "100%", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -1332,9 +1308,6 @@ function StyleTag() {
       .cardBar { height: 6px; background: rgba(255,255,255,0.2); border-radius: 999px; overflow: hidden; }
       .creditCard { width: 100%; aspect-ratio: 1.7; max-height: 200px; min-height: 165px; border-radius: 18px; padding: 16px; border: none; cursor: pointer; position: relative; overflow: hidden; font-family: inherit; transition: transform .2s; }
       .creditCard:active { transform: scale(0.98); }
-      .glareLayer { position: absolute; inset: 0; z-index: 2; pointer-events: none; border-radius: 18px;
-        background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.13) var(--glare, 45%), rgba(255,255,255,0.22) calc(var(--glare, 45%) + 3%), rgba(255,255,255,0.13) calc(var(--glare, 45%) + 6%), transparent 70%);
-        transition: background .1s linear; }
       .tierBadge { display: inline-block; margin-top: 4px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: rgba(255,255,255,0.85); border: 1px solid rgba(255,255,255,0.35); border-radius: 6px; padding: 2px 7px; }
       .fab { position: fixed; bottom: 96px; right: 16px; width: 52px; height: 52px; border-radius: 17px; border: none; background: linear-gradient(135deg, ${T.accent}, ${T.accentLight}); color: #fff; font-size: 27px; font-weight: 300; cursor: pointer; box-shadow: 0 8px 24px var(--acc-42); z-index: 45; display: flex; align-items: center; justify-content: center; }
       .fab:active { transform: scale(0.92); }
