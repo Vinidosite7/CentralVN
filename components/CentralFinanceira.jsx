@@ -551,6 +551,7 @@ function ExpenseBucket({ title, color, items, onDel }) {
 function Dividas({ db, set }) {
   const [form, setForm] = useState(false);
   const [editing, setEditing] = useState(null); // loan em edição
+  const [preset, setPreset] = useState(null);    // {person} pra pré-preencher ao adicionar numa pessoa
   const loans = (db.loans || []).filter((l) => !l.settled);
 
   const euDevo = loans.filter((l) => l.direction === "owe").reduce((a, l) => a + (l.total - l.paidAmount), 0);
@@ -586,7 +587,7 @@ function Dividas({ db, set }) {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <Row><H2>Dívidas</H2><button className="btnGhost" onClick={() => { setForm((s) => !s); setEditing(null); }}>{form ? "Fechar" : "+ Dívida"}</button></Row>
+      <Row><H2>Dívidas</H2><button className="btnGhost" onClick={() => { setForm((s) => !s); setEditing(null); setPreset(null); }}>{form ? "Fechar" : "+ Dívida"}</button></Row>
 
       {/* resumo: eu devo x me devem */}
       <div className="gridWrap" style={{ display: "grid", gap: 12 }}>
@@ -600,7 +601,7 @@ function Dividas({ db, set }) {
         </Card>
       </div>
 
-      {form && <LoanForm onSave={async (l) => { setForm(false); const { data } = await DB.addLoan(l); set({ loans: [data || { id: uid(), paidAmount: 0, paidInstallments: 0, settled: false, ...l }, ...(db.loans || [])] }); }} />}
+      {form && <LoanForm preset={preset} onCancel={() => { setForm(false); setPreset(null); }} onSave={async (l) => { setForm(false); setPreset(null); const { data } = await DB.addLoan(l); set({ loans: [data || { id: uid(), paidAmount: 0, paidInstallments: 0, settled: false, ...l }, ...(db.loans || [])] }); }} />}
       {editing && <LoanForm loan={editing} onSave={salvarEdicao} onCancel={() => setEditing(null)} />}
 
       {/* grupos por pessoa */}
@@ -626,8 +627,9 @@ function Dividas({ db, set }) {
               </div>
             </Row>
             <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-              {items.map((l) => <LoanRow key={l.id} loan={l} onPay={pagar} onDel={excluir} onEdit={() => { setEditing(l); setForm(false); }} />)}
+              {items.map((l) => <LoanRow key={l.id} loan={l} onPay={pagar} onDel={excluir} onEdit={() => { setEditing(l); setForm(false); setPreset(null); }} />)}
             </div>
+            <button className="btnGhost" style={{ marginTop: 12, width: "100%" }} onClick={() => { setPreset({ person: pessoa }); setForm(true); setEditing(null); }}>+ Adicionar dívida de {pessoa}</button>
           </Card>
         );
       })}
@@ -697,13 +699,13 @@ function LoanRow({ loan, onPay, onDel, onEdit }) {
   );
 }
 
-function LoanForm({ onSave, onCancel, loan }) {
+function LoanForm({ onSave, onCancel, loan, preset }) {
   const editando = !!loan;
   const [f, setF] = useState(loan ? {
     title: loan.title, person: loan.person || "", direction: loan.direction || "owe",
     kind: loan.kind, total: String(loan.total), installments: loan.installments,
     due: loan.due || "", cat: loan.cat || "Pessoal",
-  } : { title: "", person: "", direction: "owe", kind: "parcelada", total: "", installments: 12, due: "", cat: "Pessoal" });
+  } : { title: "", person: (preset && preset.person) || "", direction: (preset && preset.direction) || "owe", kind: "parcelada", total: "", installments: 12, due: "", cat: "Pessoal" });
   const up = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const isParc = f.kind === "parcelada";
   const isOwed = f.direction === "owed";
@@ -1013,12 +1015,6 @@ function Cartoes({ db, set, owe, owed, onOpen, onNew }) {
 
       {/* Saldos PIX */}
       <BalancesCard db={db} set={set} />
-
-      {/* Dívidas */}
-      <Card>
-        <CardTitle>Quem deve quem</CardTitle>
-        <div style={{ marginTop: 10 }}><DebtManager db={db} set={set} /></div>
-      </Card>
     </div>
   );
 }
