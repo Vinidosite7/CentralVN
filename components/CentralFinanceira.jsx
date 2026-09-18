@@ -550,137 +550,195 @@ function ExpenseBucket({ title, color, items, onDel }) {
 /* ============================== DÍVIDAS ================================= */
 function Dividas({ db, set }) {
   const [form, setForm] = useState(false);
-  const loans = db.loans || [];
-  const parceladas = loans.filter((l) => l.kind === "parcelada" && !l.settled);
-  const avista = loans.filter((l) => l.kind === "avista" && !l.settled);
+  const [editing, setEditing] = useState(null); // loan em edição
+  const loans = (db.loans || []).filter((l) => !l.settled);
 
-  const totalDevo = loans.filter((l) => !l.settled).reduce((a, l) => a + (l.total - l.paidAmount), 0);
+  const euDevo = loans.filter((l) => l.direction === "owe").reduce((a, l) => a + (l.total - l.paidAmount), 0);
+  const meDevem = loans.filter((l) => l.direction === "owed").reduce((a, l) => a + (l.total - l.paidAmount), 0);
+
+  // agrupa por pessoa
+  const grupos = {};
+  loans.forEach((l) => {
+    const p = l.person || "Sem nome";
+    (grupos[p] = grupos[p] || []).push(l);
+  });
+  const pessoas = Object.keys(grupos).sort();
 
   const pagar = async (loan, amount) => {
-    // update otimista
     const isParc = loan.kind === "parcelada";
     const novoPago = isParc
       ? loan.paidAmount + loan.total / loan.installments
       : Math.min(loan.total, loan.paidAmount + (amount || 0));
     const novasParc = isParc ? loan.paidInstallments + 1 : loan.paidInstallments;
     const settled = isParc ? novasParc >= loan.installments : novoPago >= loan.total;
-    set({ loans: loans.map((l) => l.id === loan.id ? { ...l, paidAmount: novoPago, paidInstallments: novasParc, settled } : l) });
-    // persiste + gera gasto automático
+    const nextLoans = (db.loans || []).map((l) => l.id === loan.id ? { ...l, paidAmount: novoPago, paidInstallments: novasParc, settled } : l);
+    set({ loans: nextLoans });
     const { gasto } = await DB.payLoan(loan, amount);
-    if (gasto) set({ expenses: [gasto, ...db.expenses], loans: loans.map((l) => l.id === loan.id ? { ...l, paidAmount: novoPago, paidInstallments: novasParc, settled } : l) });
+    if (gasto) set({ expenses: [gasto, ...db.expenses], loans: nextLoans });
   };
-  const excluir = (id) => { set({ loans: loans.filter((l) => l.id !== id) }); DB.delLoan(id); };
+  const excluir = (id) => { set({ loans: (db.loans || []).filter((l) => l.id !== id) }); DB.delLoan(id); };
+  const salvarEdicao = async (patch) => {
+    const nextLoans = (db.loans || []).map((l) => l.id === editing.id ? { ...l, ...patch } : l);
+    set({ loans: nextLoans });
+    await DB.updateLoan(editing.id, patch);
+    setEditing(null);
+  };
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <Row><H2>Dívidas</H2><button className="btnGhost" onClick={() => setForm((s) => !s)}>{form ? "Fechar" : "+ Dívida"}</button></Row>
+      <Row><H2>Dívidas</H2><button className="btnGhost" onClick={() => { setForm((s) => !s); setEditing(null); }}>{form ? "Fechar" : "+ Dívida"}</button></Row>
 
-      {/* total geral */}
-      <Card glow={T.red}>
-        <CardTitle>Total que devo</CardTitle>
-        <p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 30, color: T.red, letterSpacing: "-0.02em" }}>{fmt(totalDevo)}</p>
-        <p style={{ margin: "4px 0 0", fontSize: 12, color: T.text2 }}>{parceladas.length} parcelada(s) · {avista.length} à vista</p>
-      </Card>
+      {/* resumo: eu devo x me devem */}
+      <div className="gridWrap" style={{ display: "grid", gap: 12 }}>
+        <Card glow={T.red}>
+          <CardTitle>Eu devo</CardTitle>
+          <p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 26, color: T.red, letterSpacing: "-0.02em" }}>{fmt(euDevo)}</p>
+        </Card>
+        <Card glow={T.green}>
+          <CardTitle>Me devem</CardTitle>
+          <p style={{ margin: "4px 0 0", fontFamily: T.mono, fontWeight: 700, fontSize: 26, color: T.green, letterSpacing: "-0.02em" }}>{fmt(meDevem)}</p>
+        </Card>
+      </div>
 
-      {form && <LoanForm onSave={async (l) => { setForm(false); const { data } = await DB.addLoan(l); set({ loans: [data || { id: uid(), paidAmount: 0, paidInstallments: 0, settled: false, ...l }, ...loans] }); }} />}
+      {form && <LoanForm onSave={async (l) => { setForm(false); const { data } = await DB.addLoan(l); set({ loans: [data || { id: uid(), paidAmount: 0, paidInstallments: 0, settled: false, ...l }, ...(db.loans || [])] }); }} />}
+      {editing && <LoanForm loan={editing} onSave={salvarEdicao} onCancel={() => setEditing(null)} />}
 
-      {/* PARCELADAS */}
-      <Card>
-        <CardTitle>Parceladas</CardTitle>
-        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-          {parceladas.length === 0 && <Empty text="Nenhuma dívida parcelada." />}
-          {parceladas.map((l) => {
-            const valParc = l.total / l.installments;
-            const restam = l.installments - l.paidInstallments;
-            const pct = (l.paidInstallments / l.installments) * 100;
-            return (
-              <div key={l.id} style={{ background: T.raised, border: `1px solid ${T.border}`, borderRadius: 12, padding: 12 }}>
-                <Row>
-                  <div><p className="rt">{l.title}</p><p className="rs">{fmt(valParc)} × {l.installments}{l.creditor ? " · " + l.creditor : ""}{l.due ? " · vence " + dueLabel(l.due).text.toLowerCase() : ""}</p></div>
-                  <button className="link" style={{ color: T.text3, fontSize: 18 }} onClick={() => excluir(l.id)}>×</button>
-                </Row>
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ display: "flex", gap: 3 }}>
-                    {Array.from({ length: l.installments }).map((_, i) => <div key={i} style={{ flex: 1, height: 5, borderRadius: 2, background: i < l.paidInstallments ? T.green : "rgba(255,255,255,0.08)" }} />)}
-                  </div>
-                  <Row style={{ marginTop: 8 }}>
-                    <span style={{ fontSize: 11, color: T.text2, fontFamily: T.mono }}>{restam > 0 ? `${l.paidInstallments}/${l.installments} pagas · falta ${fmt(valParc * restam)}` : "Quitada ✅"}</span>
-                    {restam > 0 && <button className="btnPaySm" onClick={() => pagar(l)}>Paguei 1 parcela</button>}
-                  </Row>
-                </div>
+      {/* grupos por pessoa */}
+      {pessoas.length === 0 && <Card><Empty text="Nenhuma dívida. Toca em + Dívida." /></Card>}
+      {pessoas.map((pessoa) => {
+        const items = grupos[pessoa];
+        const dele = items.filter((l) => l.direction === "owed").reduce((a, l) => a + (l.total - l.paidAmount), 0); // ele me deve
+        const meu = items.filter((l) => l.direction === "owe").reduce((a, l) => a + (l.total - l.paidAmount), 0);   // eu devo a ele
+        const liquido = dele - meu; // >0 = ele me deve no líquido; <0 = eu devo a ele
+        return (
+          <Card key={pessoa}>
+            <Row style={{ alignItems: "baseline" }}>
+              <div>
+                <h3 style={{ margin: 0, fontFamily: T.display, fontWeight: 800, fontSize: 18, letterSpacing: "-0.02em" }}>{pessoa}</h3>
+                <p style={{ margin: "2px 0 0", fontSize: 11, color: T.text3 }}>{items.length} lançamento(s)</p>
               </div>
-            );
-          })}
-        </div>
-      </Card>
-
-      {/* À VISTA */}
-      <Card>
-        <CardTitle>À vista</CardTitle>
-        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-          {avista.length === 0 && <Empty text="Nenhuma dívida à vista." />}
-          {avista.map((l) => <AvistaRow key={l.id} loan={l} onPay={pagar} onDel={excluir} />)}
-        </div>
-      </Card>
+              <div style={{ textAlign: "right" }}>
+                <p style={{ margin: 0, fontSize: 10, color: T.text3, textTransform: "uppercase", letterSpacing: 0.5 }}>Saldo</p>
+                <p style={{ margin: 0, fontFamily: T.mono, fontWeight: 700, fontSize: 17, color: liquido >= 0 ? T.green : T.red }}>
+                  {liquido >= 0 ? "" : "-"}{fmt(Math.abs(liquido))}
+                </p>
+                <p style={{ margin: 0, fontSize: 9, color: T.text3 }}>{liquido >= 0 ? "te deve" : "você deve"}</p>
+              </div>
+            </Row>
+            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+              {items.map((l) => <LoanRow key={l.id} loan={l} onPay={pagar} onDel={excluir} onEdit={() => { setEditing(l); setForm(false); }} />)}
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }
 
-function AvistaRow({ loan, onPay, onDel }) {
+/* uma linha de dívida (parcelada ou à vista), dentro do grupo da pessoa */
+function LoanRow({ loan, onPay, onDel, onEdit }) {
   const [paying, setPaying] = useState(false);
   const [val, setVal] = useState("");
+  const isParc = loan.kind === "parcelada";
+  const isOwed = loan.direction === "owed"; // me devem
+  const col = isOwed ? T.green : T.red;
   const restam = loan.total - loan.paidAmount;
-  const pct = (loan.paidAmount / loan.total) * 100;
+  const valParc = isParc ? loan.total / loan.installments : 0;
+  const restamParc = isParc ? loan.installments - loan.paidInstallments : 0;
+  const pct = isParc ? (loan.paidInstallments / loan.installments) * 100 : (loan.paidAmount / loan.total) * 100;
   const registrar = () => { const a = parseFloat(val) || 0; if (a <= 0) return; onPay(loan, a); setPaying(false); setVal(""); };
+  const verbo = isOwed ? "Recebi" : "Paguei";
+
   return (
     <div style={{ background: T.raised, border: `1px solid ${T.border}`, borderRadius: 12, padding: 12 }}>
       <Row>
-        <div><p className="rt">{loan.title}</p><p className="rs">{loan.creditor ? loan.creditor + " · " : ""}{loan.due ? "vence " + dueLabel(loan.due).text.toLowerCase() : "sem prazo"}</p></div>
-        <button className="link" style={{ color: T.text3, fontSize: 18 }} onClick={() => onDel(loan.id)}>×</button>
+        <div>
+          <p className="rt">{loan.title} <span style={{ fontSize: 10, color: col, fontWeight: 700 }}>{isOwed ? "↙ me deve" : "↗ eu devo"}</span></p>
+          <p className="rs">{isParc ? `${fmt(valParc)} × ${loan.installments}` : fmt(loan.total)}{loan.due ? " · vence " + dueLabel(loan.due).text.toLowerCase() : ""}</p>
+        </div>
+        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="link" style={{ color: T.text2, fontSize: 13 }} onClick={onEdit}>editar</button>
+          <button className="link" style={{ color: T.text3, fontSize: 18 }} onClick={() => onDel(loan.id)}>×</button>
+        </span>
       </Row>
       <div style={{ marginTop: 8 }}>
-        <div className="bar"><div className="barFill" style={{ width: `${pct}%`, background: T.red }} /></div>
-        <span style={{ fontSize: 11, color: T.text2, fontFamily: T.mono, display: "block", marginTop: 6 }}>{fmt(loan.paidAmount)} de {fmt(loan.total)} · falta {fmt(restam)}</span>
+        {isParc ? (
+          <div style={{ display: "flex", gap: 3 }}>
+            {Array.from({ length: loan.installments }).map((_, i) => <div key={i} style={{ flex: 1, height: 5, borderRadius: 2, background: i < loan.paidInstallments ? col : "rgba(255,255,255,0.08)" }} />)}
+          </div>
+        ) : (
+          <div className="bar"><div className="barFill" style={{ width: `${pct}%`, background: col }} /></div>
+        )}
+        <span style={{ fontSize: 11, color: T.text2, fontFamily: T.mono, display: "block", marginTop: 6 }}>
+          {isParc
+            ? (restamParc > 0 ? `${loan.paidInstallments}/${loan.installments} · falta ${fmt(valParc * restamParc)}` : "Quitada ✅")
+            : (restam > 0 ? `${fmt(loan.paidAmount)} de ${fmt(loan.total)} · falta ${fmt(restam)}` : "Quitada ✅")}
+        </span>
       </div>
       {paying ? (
         <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-          <input className="input" type="number" autoFocus placeholder="Valor pago" value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && registrar()} style={{ flex: 1 }} />
+          <input className="input" type="number" autoFocus placeholder="Valor" value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && registrar()} style={{ flex: 1 }} />
           <button className="btnPay" onClick={registrar}>OK</button>
           <button className="link" onClick={() => { setPaying(false); setVal(""); }}>×</button>
         </div>
       ) : (
-        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-          <button className="btnPaySm" onClick={() => setPaying(true)}>Registrar pagamento</button>
-          <button className="btnPaySm" style={{ background: "rgba(52,211,153,0.14)", color: T.green, borderColor: "rgba(52,211,153,0.35)" }} onClick={() => onPay(loan, restam)}>Quitar tudo</button>
-        </div>
+        (isParc ? restamParc > 0 : restam > 0) && (
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            {isParc
+              ? <button className="btnPaySm" style={{ background: col + "22", color: col, borderColor: col + "55" }} onClick={() => onPay(loan)}>{verbo} 1 parcela</button>
+              : <>
+                  <button className="btnPaySm" style={{ background: col + "22", color: col, borderColor: col + "55" }} onClick={() => setPaying(true)}>{verbo} um valor</button>
+                  <button className="btnPaySm" onClick={() => onPay(loan, restam)}>{isOwed ? "Recebi tudo" : "Quitar tudo"}</button>
+                </>}
+          </div>
+        )
       )}
     </div>
   );
 }
 
-function LoanForm({ onSave }) {
-  const [f, setF] = useState({ title: "", creditor: "", kind: "parcelada", total: "", installments: 12, due: "", cat: "Pessoal" });
+function LoanForm({ onSave, onCancel, loan }) {
+  const editando = !!loan;
+  const [f, setF] = useState(loan ? {
+    title: loan.title, person: loan.person || "", direction: loan.direction || "owe",
+    kind: loan.kind, total: String(loan.total), installments: loan.installments,
+    due: loan.due || "", cat: loan.cat || "Pessoal",
+  } : { title: "", person: "", direction: "owe", kind: "parcelada", total: "", installments: 12, due: "", cat: "Pessoal" });
   const up = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const isParc = f.kind === "parcelada";
+  const isOwed = f.direction === "owed";
   const perParc = f.total && f.installments ? parseFloat(f.total) / f.installments : 0;
+  const submit = () => {
+    if (!f.title || !f.total || !f.person) return;
+    onSave({ ...f, total: parseFloat(f.total), installments: isParc ? +f.installments : 1, due: f.due || null });
+  };
   return (
     <Card style={{ display: "grid", gap: 12 }}>
+      {/* direção */}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button className="pchip" style={{ flex: 1, borderColor: !isOwed ? T.red : T.border, color: !isOwed ? T.red : T.text2 }} onClick={() => up("direction", "owe")}>Eu devo</button>
+        <button className="pchip" style={{ flex: 1, borderColor: isOwed ? T.green : T.border, color: isOwed ? T.green : T.text2 }} onClick={() => up("direction", "owed")}>Me devem</button>
+      </div>
+      <Field label={isOwed ? "Quem te deve" : "Pra quem você deve"}><input className="input" value={f.person} onChange={(e) => up("person", e.target.value)} placeholder="ex: Brendha" /></Field>
+      {/* tipo */}
       <div style={{ display: "flex", gap: 6 }}>
         <button className="pchip" style={{ flex: 1, borderColor: isParc ? T.accent : T.border, color: isParc ? T.accentLight : T.text2 }} onClick={() => up("kind", "parcelada")}>Parcelada</button>
         <button className="pchip" style={{ flex: 1, borderColor: !isParc ? T.accent : T.border, color: !isParc ? T.accentLight : T.text2 }} onClick={() => up("kind", "avista")}>À vista</button>
       </div>
-      <Field label="O que é"><input className="input" value={f.title} onChange={(e) => up("title", e.target.value)} placeholder={isParc ? "ex: Curso de tráfego" : "ex: Empréstimo João"} /></Field>
+      <Field label="O que é"><input className="input" value={f.title} onChange={(e) => up("title", e.target.value)} placeholder={isParc ? "ex: Curso de tráfego" : "ex: Empréstimo"} /></Field>
       <div style={{ display: "flex", gap: 10 }}>
         <Field label="Valor total"><input className="input" type="number" value={f.total} onChange={(e) => up("total", e.target.value)} placeholder="2000" /></Field>
         {isParc && <Field label="Parcelas"><input className="input" type="number" min={1} value={f.installments} onChange={(e) => up("installments", Math.max(1, +e.target.value || 1))} /></Field>}
       </div>
       <div style={{ display: "flex", gap: 10 }}>
-        <Field label="Pra quem (opcional)"><input className="input" value={f.creditor} onChange={(e) => up("creditor", e.target.value)} placeholder="ex: banco, fulano" /></Field>
-        <Field label={isParc ? "Vencimento próx." : "Vencimento"}><input className="input" type="date" value={f.due} onChange={(e) => up("due", e.target.value)} /></Field>
+        <Field label="Vencimento (opcional)"><input className="input" type="date" value={f.due} onChange={(e) => up("due", e.target.value)} /></Field>
+        {!isOwed && <Field label="Categoria do gasto"><select className="input" value={f.cat} onChange={(e) => up("cat", e.target.value)}>{CATS_OUT.map((c) => <option key={c}>{c}</option>)}</select></Field>}
       </div>
-      <Field label="Categoria do gasto"><select className="input" value={f.cat} onChange={(e) => up("cat", e.target.value)}>{CATS_OUT.map((c) => <option key={c}>{c}</option>)}</select></Field>
-      {isParc && perParc > 0 && <p style={{ margin: 0, fontSize: 12, color: T.accentLight, fontFamily: T.mono }}>{f.installments}× de {fmt(perParc)} · cada parcela paga vira gasto</p>}
-      <button className="btnPrimary" onClick={() => f.title && f.total && onSave({ ...f, total: parseFloat(f.total), installments: isParc ? +f.installments : 1, due: f.due || null })}>Adicionar dívida</button>
+      {isParc && perParc > 0 && <p style={{ margin: 0, fontSize: 12, color: T.accentLight, fontFamily: T.mono }}>{f.installments}× de {fmt(perParc)}{!isOwed ? " · cada parcela paga vira gasto" : " · cada recebimento é entrada"}</p>}
+      <div style={{ display: "flex", gap: 8 }}>
+        {editando && <button className="btnGhost" style={{ flex: 1 }} onClick={onCancel}>Cancelar</button>}
+        <button className="btnPrimary" style={{ flex: 2 }} onClick={submit}>{editando ? "Salvar alterações" : "Adicionar dívida"}</button>
+      </div>
     </Card>
   );
 }
